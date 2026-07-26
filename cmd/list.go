@@ -35,6 +35,9 @@ func HandleList() {
 	}
 
 	if *jsonOutput {
+		if jobs == nil {
+			jobs = []db.Job{}
+		}
 		out, _ := json.MarshalIndent(jobs, "", "  ")
 		fmt.Println(string(out))
 		return

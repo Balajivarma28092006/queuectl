@@ -13,6 +13,20 @@ type Job struct {
 	MaxRetries int       `json:"max_retries"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	NextRunAt *time.Time `json:"next_run_at,omitempty"`
+	WorkerID string `json:"worker_id,omitempty"`
+}
+
+func toMillis(t time.Time) int64 { return t.UnixMilli() }
+
+func fromMillis(ms int64) time.Time { return time.UnixMilli(ms).UTC() }
+
+func fromMillisPtr(ms sql.NullInt64) *time.Time {
+	if !ms.Valid {
+		return nil
+	}
+	t := fromMillis(ms.Int64)
+	return &t
 }
 
 func InsertJobToDB(database *sql.DB, job Job) error {
@@ -28,16 +42,17 @@ func InsertJobToDB(database *sql.DB, job Job) error {
 		job.State,
 		job.Attempts,
 		job.MaxRetries,
-		job.CreatedAt,
-		job.UpdatedAt,
+		toMillis(job.CreatedAt),
+		toMillis(job.UpdatedAt),
 	)
-
 	return err
 }
 
+const jobColumns = `id, command, state, attempts, max_retries, created_at, updated_at, next_run_at, worker_id`
+
 func GetJobsByState(database *sql.DB, state string) ([]Job, error) {
 	rows, err := database.Query(`
-		SELECT id, command, state, attempts, max_retries, created_at, updated_at
+		SELECT` +jobColumns+`
 		FROM jobs
 		WHERE state = ?`, state)
 

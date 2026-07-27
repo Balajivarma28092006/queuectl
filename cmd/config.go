@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/BalajiVarma28092006/queuectl/db"
 )
@@ -10,7 +11,7 @@ import (
 func HandleConfig() {
 	database, err := db.Open()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	defer database.Close()
@@ -21,15 +22,28 @@ func HandleConfig() {
 		return
 	}
 
-	if len(os.Args) < 5 || os.Args[2] != set {
+	if len(os.Args) < 5 || os.Args[2] != "set" {
 		fmt.Fprintln(os.Stderr, "Usage: queuectl config set <max-retries|backoff-base> <value>")
 		os.Exit(1)
 	}
+
 	key, val := os.Args[3], os.Args[4]
 
 	switch key{
 	case "max_retries":
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 0 {
+			fmt.Fprintf(os.Stderr, "invalid max-retries value %q\n", val)
+			os.Exit(1)
+		}
+		_ = db.SetConfig(database, "max-retries", val)
 	case "backoff-base":
+		f, err := strconv.Atoi(val)
+		if err != nil || f <= 1 {
+			fmt.Fprintf(os.Stderr, "invalid backoff-base value %q\n", f)
+			os.Exit(1)
+		}
+		_ = db.SetConfig(database, "backoff-base", val)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown config key %q\n", key)
 		os.Exit(1)

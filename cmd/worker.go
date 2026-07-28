@@ -6,17 +6,19 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/BalajiVarma28092006/queuectl/db"
 )
-
-const pollInterval = 2 * time.Second
 
 func workersDir() string {
 	return filepath.Join(".queuectl", "workers")
@@ -118,13 +120,132 @@ func workerLoop(ctx context.Context, database *sql.DB, workerID string) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(pollInterval):
+			case <-time.After(db.PollInterval):
 			}
 			continue
+		}
+
+		fmt.Fprintf(os.Stderr, "[%s] running job %s: %s\n", workerID, job.ID, job.Command)
+		runErr, lostOwnerShip := runJobWithLeaseRenewal(database, job.ID, workerID, job.Command, leaseSeconds)
+
+		if lostOwnerShip {
+			// The lease expired mid-run and ReapExpiredLeases (running in
+			// some other worker's loop) already put the job back to
+			// pending -- or another worker has already reclaimed and
+			// possibly finished it. Either way, this worker no longer
+			// owns the row: writing a result here could overwrite
+			// whatever the new owner did. Discard the result and move on.
+			fmt.Fprintf(os.Stderr, "[%s] lost ownership of job %s mid-run (lease expired); discarding this attempt's result\n", workerID, job.ID)
+			continue
+		}
+
+		if runErr != nil {
+			backoffBase := db.EffectiveBackoffBase(database)
+			if err := db.MarkJobFailure(database, job.ID, workerID, runErr.Error(), backoffBase); err != nil && err != db.ErrLostOwnership {
+				fmt.Fprintf(os.Stderr, "[%s] failed to mark job %s failure: %v\n", workerID, job.ID, err)
+			}
+			fmt.Fprintf(os.Stderr, "[%s] job %s failed: %v\n", workerID, job.ID, runErr)
+		} else {
+			if err := db.MarkJobSuccess(database, job.ID, workerID); err != nil && err != db.ErrLostOwnership {
+				fmt.Fprintf(os.Stderr, "[%s] failed to record success for %s: %v\n", workerID, job.ID, err)
+			}
+			fmt.Fprintf(os.Stderr, "[%s] job %s completed\n", workerID, job.ID)
 		}
 	}
 }
 
-func handleWorkerStop() {
+func runJobWithLeaseRenewal(database *sql.DB, jobID, workerID, Command string, leaseSeconds int) (runErr error, lostOwnerShip bool) {
+	execCtx, cancelExec := context.WithCancel(context.Background())
+	defer cancelExec()
 
+	var lost atomic.Bool
+	// serves as a channel that keep on increaseing the lease time if its less than the max recovery time they have given
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		interval := time.Duration(leaseSeconds) * time.Second / 3
+		if interval < time.Second {
+			interval = time.Second
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-execCtx.Done():
+				return
+			case <-ticker.C:
+				ok, err := db.RenewLease(database, jobID, workerID, leaseSeconds)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "[%s] lease renewal error for %s: %v (will retry)\n", workerID, jobID, err)
+					continue
+				}
+				if !ok {
+					lost.Store(true)
+					cancelExec() // kill the current running command cause we dont own the job now
+					return
+				}
+			}
+		}
+	}()
+
+	runErr = execJobCommand(execCtx, Command)
+	cancelExec()
+	<-heartbeatDone
+	return runErr, lost.Load()
+}
+
+func execJobCommand(execCtx context.Context, command string) error {
+	var c *exec.Cmd
+	if runtime.GOOS == "windows" {
+		c = exec.CommandContext(execCtx, "cmd", "/C", command)
+	} else {
+		c = exec.CommandContext(execCtx, "sh", "-c", command)
+	}
+	c.Stdout = os.Stderr
+	c.Stderr = os.Stderr
+	return c.Run()
+}
+
+func handleWorkerStop() {
+	entries, err := os.ReadDir(workersDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("no running workers found")
+			return
+		}
+		fmt.Fprintf(os.Stderr, "Failed to read workers dir: %v\n", err)
+		os.Exit(1)
+	}
+
+	signales := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pid") {
+			continue
+		}
+		path := filepath.Join(workersDir(), e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil {
+			continue
+		}
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			continue
+		}
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
+			os.Remove(path)
+			continue
+		}
+		signales++
+	}
+
+	if signales == 0 {
+		fmt.Println("no running workers found")
+	} else {
+		fmt.Printf("sent SIGTERM to %d worker process or processess \n", signales)
+	}
 }

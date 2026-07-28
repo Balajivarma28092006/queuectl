@@ -29,6 +29,7 @@ func HandleEnqueue() {
 	job.State = string(Pending)
 	job.Attempts = 0
 
+	// no priority only first come basis
 	database, err := db.Open()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open database: %v\n", err)
@@ -39,7 +40,6 @@ func HandleEnqueue() {
 	if job.MaxRetries == 0 {
 		job.MaxRetries = db.EffectiveMaxRetries(database)
 	}
-
 	job.CreatedAt = now
 	job.UpdatedAt = now
 

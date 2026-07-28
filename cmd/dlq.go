@@ -46,8 +46,27 @@ func HandleDLQ() {
 			os.Exit(1)
 		}
 		fmt.Printf("re-enqueued %s\n", os.Args[3])
+	case "--all":
+		jobs, err := db.GetJobsByState(database, string(Dead))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		if len(jobs) == 0 {
+			fmt.Println("DLQ is Empty")
+			return
+		}
+
+		for _, j := range jobs {
+			if err := db.RetryDeadJobs(database, j.ID); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
+		fmt.Printf("re-enqueued %d jobs\n", len(jobs))
 	default:
-		fmt.Fprintln(os.Stderr, "Usage: queuectl dlq <list|retry <id>>")
+		fmt.Fprintln(os.Stderr, "Usage: queuectl dlq <list|retry <id>|--all>")
 		os.Exit(1)
 	}
 }

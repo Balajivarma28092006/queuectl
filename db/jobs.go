@@ -2,7 +2,9 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -14,8 +16,8 @@ type Job struct {
 	MaxRetries     int        `json:"max_retries"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
-	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
 	NextRunAt      *time.Time `json:"next_run_at,omitempty"`
+	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
 	WorkerID       string     `json:"worker_id,omitempty"`
 	LastError      string     `json:"last_error,omitempty"`
 }
@@ -54,7 +56,7 @@ func InsertJobToDB(database *sql.DB, job Job) error {
 const jobColumns = `id, command, state, attempts, max_retries, created_at, updated_at, next_run_at, lease_expires_at, worker_id, last_error`
 
 func scanJob(row interface {
-	Scan(dest ...interface{}) error
+	Scan(dest ...any) error
 }) (*Job, error) {
 	var job Job
 	var createdAt, updatedAt int64
@@ -119,6 +121,8 @@ func StateCounts(database *sql.DB) (map[string]int, error) {
 	return counts, rows.Err()
 }
 
+var ErrLostOwnership = errors.New("lost ownership of job: lease expired and job was reclaimed")
+
 // Retry Dead jobs re-enqueus a DLQ job with a reset retry budget so thats why attempts are reset to 0 rather continuing it
 func RetryDeadJobs(database *sql.DB, id string) error {
 	res, err := database.Exec(`
@@ -153,20 +157,122 @@ func ReapExpiredLeases(database *sql.DB) (int64, error) {
 	return res.RowsAffected()
 }
 
-func MarkJobSuccess(database *sql.DB, id string) error {
-	_, err := database.Exec(`
+func MarkJobSuccess(database *sql.DB, id, workerID string) error {
+	res, err := database.Exec(`
 		UPDATE jobs
 		SET state = 'completed', attempts = attempts + 1, updated_at = ?,
-			lease_expired_at = NULL, last_error = NULL
-		WHERE id = ?
-		`, toMillis(time.Now().UTC()), id)
-	return err
+			lease_expires_at = NULL, last_error = NULL
+		WHERE id = ? AND worker_id = ? AND state = 'processing'
+		`, toMillis(time.Now().UTC()), id, workerID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrLostOwnership
+	}
+	return nil
 }
 
-func MarkJobFailure(databse *sql.DB, id string, errorMsg string, backoffBase float64) error {
+// next run will be after a failure is after backoff-base ^ attempts
+func MarkJobFailure(database *sql.DB, id string, workerID, errorMsg string, backoffBase float64) error {
+	var attempts, maxRetries int
+	err := database.QueryRow(
+		`SELECT attempts, max_retries FROM jobs WHERE id = ? AND worker_id = ? AND state = 'processing'`,
+		id, workerID,
+	).Scan(&attempts, &maxRetries)
+	if err == sql.ErrNoRows {
+		return ErrLostOwnership
+	}
+	if err != nil {
+		return err
+	}
+	attempts++
+	now := time.Now().UTC()
 
+	if attempts >= maxRetries {
+		res, err := database.Exec(`
+		UPDATE jobs
+		SET state = 'dead', attempts = ?, updated_at = ?,
+			lease_expires_at = NULL, last_error = ?
+		WHERE id = ? AND worker_id = ? AND state = 'processing'`,
+			attempts, toMillis(now), errorMsg, id, workerID)
+		if err != nil {
+			return err
+		}
+		return checkOwned(res)
+	}
+
+	delaySeconds := math.Pow(backoffBase, float64(attempts))
+	nextRun := now.Add(time.Duration(delaySeconds * float64(time.Second)))
+	res, err := database.Exec(`
+	UPDATE jobs
+	SET state = 'failed', attempts = ?, updated_at = ?, next_run_at = ?,
+		lease_expires = NULL, last_error = ?
+	WHERE id = ? AND worker_id = ? AND state = 'processing'`,
+		attempts, toMillis(now), toMillis(nextRun), errorMsg, id, workerID)
+	if err != nil {
+		return nil
+	}
+	return checkOwned(res)
+}
+
+func checkOwned(res sql.Result) error {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrLostOwnership
+	}
+	return nil
+}
+
+// renewLease extends a jobs lease_expires_at as long as the worker still owns it
+func RenewLease(database *sql.DB, id, workerID string, leaseSeconds int) (bool, error) {
+	newLease := toMillis(time.Now().UTC().Add(time.Duration(leaseSeconds) * time.Second))
+	res, err := database.Exec(`
+		UPDATE jobs
+		SET lease_expires_at = ?
+		WHERE id = ? AND worker_id = ? AND state = 'processing'`,
+		newLease, id, workerID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 func ClaimNextJob(database *sql.DB, workerID string, leaseSeconds int) (*Job, error) {
+	now := time.Now().UTC()
+	nowMs := toMillis(now)
+	leaseMs := toMillis(now.Add(time.Duration(leaseSeconds) * time.Second))
 
+	row := database.QueryRow(`
+		UPDATE jobs
+		SET state = 'processing', worker_id = ?, lease_expires_at = ?, updated_at = ?
+		WHERE id = (
+			SELECT id FROM jobs
+			WHERE state = 'pending'
+				OR (state = 'failed' AND (next_run_at IS NULL OR next_run_at <= ?))
+			ORDER BY created_at ASC
+			LIMIT 1
+		)
+		RETURNING
+	`+jobColumns, workerID, leaseMs, nowMs, nowMs)
+
+	job, err := scanJob(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return job, nil
 }

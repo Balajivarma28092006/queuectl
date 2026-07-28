@@ -35,7 +35,9 @@ func initSchema(database *sql.DB) error {
 		created_at INTEGER NOT NULL,
 		updated_at INTEGER NOT NULL,
 		next_run_at INTEGER,
-		worker_id TEXT
+		lease_expires_at INTEGER,
+		worker_id TEXT,
+		last_error TEXT
 	);
 
 	CREATE TABLE IF NOT EXISTS config (

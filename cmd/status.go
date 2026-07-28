@@ -12,7 +12,7 @@ type State string
 const (
 	Pending    State = "pending"
 	Processing State = "processing"
-	Failed     State = "Failed"
+	Failed     State = "failed"
 	Completed  State = "completed"
 	Dead       State = "dead"
 )

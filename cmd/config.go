@@ -17,8 +17,9 @@ func HandleConfig() {
 	defer database.Close()
 
 	if len(os.Args) >= 3 && os.Args[2] == "show" {
-		fmt.Printf("max_retries=%d\nbackoff_base=%v\n",
-			db.EffectiveMaxRetries(database), db.EffectiveBackoffBase(database))
+		fmt.Printf("max_retries=%d\nbackoff_base=%v\nlease_seconds=%d (max allowed: %d, to keep crash recovery under %d seconds)\n",
+			db.EffectiveMaxRetries(database), db.EffectiveBackoffBase(database),
+			db.EffectiveLeaseSeconds(database), db.MaxLeaseSeconds(), db.RecoverySeconds)
 		return
 	}
 
@@ -44,6 +45,18 @@ func HandleConfig() {
 			os.Exit(1)
 		}
 		_ = db.SetConfig(database, "backoff_base", val)
+	case "lease-seconds":
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid lease-seconds value %q\n", val)
+			os.Exit(1)
+		}
+		// setleaseSeconds itself rejects anything that would push lease_seconds + poll_interval past
+		// the max lease seconds it would return an error
+		if err := db.SetLeaseSeconds(database, n); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown config key %q\n", key)
 		os.Exit(1)

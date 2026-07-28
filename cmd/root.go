@@ -29,6 +29,8 @@ func Execute() {
 		HandleDLQ()
 	case "config":
 		HandleConfig()
+	case "help":
+		PrintGlobalUsage()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", os.Args[1])
 		PrintGlobalUsage()

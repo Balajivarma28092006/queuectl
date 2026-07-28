@@ -9,17 +9,18 @@ import (
 // Used when the config table has no value
 // or contains an invalid value.
 const (
-	defaultMaxRetries = 3
-	defaultBackoffBase = 2.0
+	defaultMaxRetries   = 3
+	defaultBackoffBase  = 2.0
+	defaultLeaseSeconds = 15
 )
 
 // if the value exists get it or return a default value
-func GetConfigInt(database *sql.DB, key string, fallback int) int{
+func GetConfigInt(database *sql.DB, key string, fallback int) int {
 	var v string
 	err := database.QueryRow(`
 	SELECT value FROM config WHERE key = ?
 	`, key).Scan(&v)
-	if errors.Is(err, sql.ErrNoRows){
+	if errors.Is(err, sql.ErrNoRows) {
 		return fallback
 	}
 	if err != nil {
@@ -29,15 +30,15 @@ func GetConfigInt(database *sql.DB, key string, fallback int) int{
 	if err != nil {
 		return fallback
 	}
-	return n 
+	return n
 }
 
-func GetConfigFloat(database *sql.DB, key string, fallback float64) float64{
+func GetConfigFloat(database *sql.DB, key string, fallback float64) float64 {
 	var v string
 	err := database.QueryRow(`
 	SELECT value FROM config WHERE key = ?
 	`, key).Scan(&v)
-	if errors.Is(err, sql.ErrNoRows){
+	if errors.Is(err, sql.ErrNoRows) {
 		return fallback
 	}
 	if err != nil {
@@ -47,10 +48,10 @@ func GetConfigFloat(database *sql.DB, key string, fallback float64) float64{
 	if err != nil {
 		return fallback
 	}
-	return f  
+	return f
 }
 
-func SetConfig(database *sql.DB, key, value string) error{
+func SetConfig(database *sql.DB, key, value string) error {
 	_, err := database.Exec(`
 	INSERT INTO config (key, value) VALUES (?, ?)
 	ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -58,9 +59,13 @@ func SetConfig(database *sql.DB, key, value string) error{
 	return err
 }
 
-func EffectiveMaxRetries(database *sql.DB) int{
+func EffectiveMaxRetries(database *sql.DB) int {
 	return GetConfigInt(database, "max_retries", defaultMaxRetries)
 }
-func EffectiveBackoffBase(database *sql.DB) float64{
+func EffectiveBackoffBase(database *sql.DB) float64 {
 	return GetConfigFloat(database, "backoff_base", defaultBackoffBase)
+}
+
+func EffectiveLeaseSeconds(database *sql.DB) int {
+	return GetConfigInt(database, "lease_seconds", defaultLeaseSeconds)
 }

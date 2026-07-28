@@ -98,7 +98,30 @@ func handleWorkerStart(args []string) {
 
 func workerLoop(ctx context.Context, database *sql.DB, workerID string) {
 	for {
+		// select whichever data is recieved first
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		if n, err := db.ReapExpiredLeases(database); err == nil && n > 0 {
+			fmt.Fprintf(os.Stderr, "[%s] reaped %d job(s) stuck past their lease\n", workerID, n)
+		}
+		leaseSeconds := db.EffectiveLeaseSeconds(database)
+		job, err := db.ClaimNextJob(database, workerID, leaseSeconds)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[%s] claim error: %v\n", workerID, err)
+			job = nil
+		}
 
+		if job == nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(pollInterval):
+			}
+			continue
+		}
 	}
 }
 

@@ -2,19 +2,22 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 )
 
 type Job struct {
-	ID         string     `json:"id"`
-	Command    string     `json:"command"`
-	State      string     `json:"state"`
-	Attempts   int        `json:"attempts"`
-	MaxRetries int        `json:"max_retries"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	NextRunAt  *time.Time `json:"next_run_at,omitempty"`
-	WorkerID   string     `json:"worker_id,omitempty"`
+	ID             string     `json:"id"`
+	Command        string     `json:"command"`
+	State          string     `json:"state"`
+	Attempts       int        `json:"attempts"`
+	MaxRetries     int        `json:"max_retries"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
+	NextRunAt      *time.Time `json:"next_run_at,omitempty"`
+	WorkerID       string     `json:"worker_id,omitempty"`
+	LastError      string     `json:"last_error,omitempty"`
 }
 
 func toMillis(t time.Time) int64 { return t.UnixMilli() }
@@ -48,19 +51,19 @@ func InsertJobToDB(database *sql.DB, job Job) error {
 	return err
 }
 
-const jobColumns = `id, command, state, attempts, max_retries, created_at, updated_at, next_run_at, worker_id`
+const jobColumns = `id, command, state, attempts, max_retries, created_at, updated_at, next_run_at, lease_expires_at, worker_id, last_error`
 
 func scanJob(row interface {
 	Scan(dest ...interface{}) error
 }) (*Job, error) {
 	var job Job
 	var createdAt, updatedAt int64
-	var nextRunAt sql.NullInt64
-	var workerID sql.NullString
+	var nextRunAt, leaseExpiresAt sql.NullInt64
+	var workerID, lastError sql.NullString
 
 	err := row.Scan(
 		&job.ID, &job.Command, &job.State, &job.Attempts, &job.MaxRetries,
-		&createdAt, &updatedAt, &nextRunAt, &workerID,
+		&createdAt, &updatedAt, &nextRunAt, &leaseExpiresAt, &workerID, &lastError,
 	)
 	if err != nil {
 		return nil, err
@@ -69,6 +72,8 @@ func scanJob(row interface {
 	job.CreatedAt = fromMillis(createdAt)
 	job.UpdatedAt = fromMillis(updatedAt)
 	job.NextRunAt = fromMillisPtr(nextRunAt)
+	job.LeaseExpiresAt = fromMillisPtr(leaseExpiresAt)
+	job.LastError = lastError.String
 	job.WorkerID = workerID.String
 	return &job, nil
 }
@@ -112,4 +117,56 @@ func StateCounts(database *sql.DB) (map[string]int, error) {
 		counts[state] = n
 	}
 	return counts, rows.Err()
+}
+
+// Retry Dead jobs re-enqueus a DLQ job with a reset retry budget so thats why attempts are reset to 0 rather continuing it
+func RetryDeadJobs(database *sql.DB, id string) error {
+	res, err := database.Exec(`
+		UPDATE jobs
+		SET state = 'pending', attempts = 0, next_run_at = NULL,
+		worker_id = NULL, updated_at = ?
+		WHERE id = ? AND state = 'dead'
+	`, toMillis(time.Now().UTC()), id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("job %q not found in DLQ (must be state=dead)", id)
+	}
+	return nil
+}
+
+func ReapExpiredLeases(database *sql.DB) (int64, error) {
+	now := toMillis(time.Now().UTC())
+	res, err := database.Exec(`
+		UPDATE jobs
+		SET state = 'pending', worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+		WHERE state = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at < ?`,
+		now, now)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func MarkJobSuccess(database *sql.DB, id string) error {
+	_, err := database.Exec(`
+		UPDATE jobs
+		SET state = 'completed', attempts = attempts + 1, updated_at = ?,
+			lease_expired_at = NULL, last_error = NULL
+		WHERE id = ?
+		`, toMillis(time.Now().UTC()), id)
+	return err
+}
+
+func MarkJobFailure(databse *sql.DB, id string, errorMsg string, backoffBase float64) error {
+
+}
+
+func ClaimNextJob(database *sql.DB, workerID string, leaseSeconds int) (*Job, error) {
+
 }

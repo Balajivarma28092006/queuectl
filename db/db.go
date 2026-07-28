@@ -3,7 +3,6 @@ package db
 import (
 	"database/sql"
 	"fmt"
-	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -49,27 +48,5 @@ func initSchema(database *sql.DB) error {
 	}
 
 	// can implement migrations but it can wait for now
-	return nil
-}
-
-// Retry Dead jobs re-enqueus a DLQ job with a reset retry budget so thats why attempts are reset to 0 rather continuing it
-func RetryDeadJobs(database *sql.DB, id string) error {
-	res, err := database.Exec(`
-		UPDATE jobs
-		SET state = 'pending', attempts = 0, next_run_at = NULL,
-		worker_id = NULL, updated_at = ?
-		WHERE id = ? AND state = 'dead'
-	`, toMillis(time.Now().UTC()), id)
-	if err != nil {
-		return err
-	}
-
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return fmt.Errorf("job %q not found in DLQ (must be state=dead)", id)
-	}
 	return nil
 }

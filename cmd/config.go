@@ -36,14 +36,14 @@ func HandleConfig() {
 			fmt.Fprintf(os.Stderr, "invalid max-retries value %q\n", val)
 			os.Exit(1)
 		}
-		_ = db.SetConfig(database, "max-retries", val)
+		_ = db.SetConfig(database, "max_retries", val)
 	case "backoff-base":
 		f, err := strconv.ParseFloat(val, 64)
 		if err != nil || f <= 1 {
 			fmt.Fprintf(os.Stderr, "invalid backoff-base value %q (must be > 1) \n", val)
 			os.Exit(1)
 		}
-		_ = db.SetConfig(database, "backoff-base", val)
+		_ = db.SetConfig(database, "backoff_base", val)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown config key %q\n", key)
 		os.Exit(1)

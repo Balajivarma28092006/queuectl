@@ -44,6 +44,12 @@ func HandleStatus() {
 	}
 
 	fmt.Printf("Workers (live): %d\n", len(liveWorkersPIDs()))
+	for _, pid := range liveWorkersPIDs() {
+		fmt.Printf(" pid %d\n", pid)
+	}
+
+	fmt.Printf("Config: max_retries=%d backoff_base=%v",
+		db.EffectiveMaxRetries(database), db.EffectiveBackoffBase(database))
 }
 
 func liveWorkersPIDs() []int {

@@ -26,23 +26,22 @@ func HandleEnqueue() {
 	}
 	validateInputs(job)
 	now := time.Now().Round(time.Second)
-	job.State = "pending"
+	job.State = string(Pending)
 	job.Attempts = 0
 
-	if job.MaxRetries == 0 {
-		job.MaxRetries = 3
-	}
-
-	job.CreatedAt = now
-	job.UpdatedAt = now
-
-	// the jobs are added in to the database as first come basis
 	database, err := db.Open()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open database: %v\n", err)
 		os.Exit(1)
 	}
 	defer database.Close()
+
+	if job.MaxRetries == 0 {
+		job.MaxRetries = db.EffectiveMaxRetries(database)
+	}
+
+	job.CreatedAt = now
+	job.UpdatedAt = now
 
 	err = db.InsertJobToDB(database, db.Job{
 		ID:         job.ID,

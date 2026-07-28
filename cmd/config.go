@@ -18,7 +18,7 @@ func HandleConfig() {
 
 	if len(os.Args) >= 3 && os.Args[2] == "show" {
 		fmt.Printf("max_retries=%d\nbackoff_base=%v\n",
-		db.EffectiveMaxRetries(database), db.EffectiveBackoffBase(database))
+			db.EffectiveMaxRetries(database), db.EffectiveBackoffBase(database))
 		return
 	}
 
@@ -29,7 +29,7 @@ func HandleConfig() {
 
 	key, val := os.Args[3], os.Args[4]
 
-	switch key{
+	switch key {
 	case "max_retries":
 		n, err := strconv.Atoi(val)
 		if err != nil || n < 0 {
@@ -38,9 +38,9 @@ func HandleConfig() {
 		}
 		_ = db.SetConfig(database, "max-retries", val)
 	case "backoff-base":
-		f, err := strconv.Atoi(val)
+		f, err := strconv.ParseFloat(val, 64)
 		if err != nil || f <= 1 {
-			fmt.Fprintf(os.Stderr, "invalid backoff-base value %q\n", f)
+			fmt.Fprintf(os.Stderr, "invalid backoff-base value %q (must be > 1) \n", val)
 			os.Exit(1)
 		}
 		_ = db.SetConfig(database, "backoff-base", val)

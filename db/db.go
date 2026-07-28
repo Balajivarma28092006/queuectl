@@ -7,7 +7,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-func Open() (*sql.DB, error){
+func Open() (*sql.DB, error) {
 	return OpenAt("queue.db")
 }
 
@@ -35,7 +35,7 @@ func initSchema(database *sql.DB) error {
 		created_at INTEGER NOT NULL,
 		updated_at INTEGER NOT NULL,
 		next_run_at INTEGER,
-		worker_id TEXT,
+		worker_id TEXT
 	);
 
 	CREATE TABLE IF NOT EXISTS config (

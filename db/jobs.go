@@ -148,9 +148,17 @@ func ReapExpiredLeases(database *sql.DB) (int64, error) {
 	now := toMillis(time.Now().UTC())
 	res, err := database.Exec(`
 		UPDATE jobs
-		SET state = 'pending', worker_id = NULL, lease_expires_at = NULL, updated_at = ?
-		WHERE state = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at < ?`,
-		now, now)
+		SET state = CASE
+        	WHEN attempts + 1 >= max_retries THEN 'dead'
+        	ELSE 'pending'
+    	END,
+    	attempts = attempts + 1,
+    	worker_id = NULL,
+    	lease_expires_at = NULL,
+    	updated_at = ?
+	WHERE state = 'processing'
+  	AND lease_expires_at IS NOT NULL
+  	AND lease_expires_at < ?`, now, now)
 	if err != nil {
 		return 0, err
 	}
@@ -211,7 +219,7 @@ func MarkJobFailure(database *sql.DB, id string, workerID, errorMsg string, back
 	res, err := database.Exec(`
 	UPDATE jobs
 	SET state = 'failed', attempts = ?, updated_at = ?, next_run_at = ?,
-		lease_expires = NULL, last_error = ?
+		lease_expires_at = NULL, last_error = ?
 	WHERE id = ? AND worker_id = ? AND state = 'processing'`,
 		attempts, toMillis(now), toMillis(nextRun), errorMsg, id, workerID)
 	if err != nil {

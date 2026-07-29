@@ -157,7 +157,7 @@ queuectl list --state failed --json
 ```bash
 queuectl dlq list             # show all dead jobs
 queuectl dlq retry <id>       # re-enqueue one dead job with a fresh retry budget
-queuectl dlq --all            # re-enqueue every dead job
+queuectl dlq retry --all            # re-enqueue every dead job
 ```
 
 Jobs land in the DLQ (`state=dead`) once they've failed `max_retries` times.

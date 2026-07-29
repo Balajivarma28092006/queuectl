@@ -233,3 +233,5 @@ coverage next.
   for what would need to change to add it).
 - `queue.db` and `.queuectl/workers/` are resolved relative to the current
   working directory; there's no `--db` flag to point at a queue elsewhere.
+
+# CLI demo link: https://drive.google.com/file/d/1IMsvdPukf_E_Alr2At_QniP_kuyaiKtt/view?usp=drivesdk

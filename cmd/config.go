@@ -24,7 +24,7 @@ func HandleConfig() {
 	}
 
 	if len(os.Args) < 5 || os.Args[2] != "set" {
-		fmt.Fprintln(os.Stderr, "Usage: queuectl config set <max-retries|backoff-base> <value>")
+		fmt.Fprintln(os.Stderr, "Usage: queuectl config set <max-retries|backoff-base|lease-seconds> <value>")
 		os.Exit(1)
 	}
 
